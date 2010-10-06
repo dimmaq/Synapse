@@ -418,22 +418,12 @@ begin
   Result := ReadResult = 235;
 end;
 
-procedure TSMTPSend.ClearResult;
-begin
-  FResultCode := -1;
-  FResultString := '';
-  FFullResult.Clear;
-  //---
-  FLastCmd := '';
-  FLastCmdData := '';
-end;
-
 function TSMTPSend.Connect: Boolean;
 begin
   FSock.CloseSocket;
   FSock.Bind(FIPInterface, cAnyPort);
   if FSock.LastError = 0 then
-    FSock.Connect(FTargetHost, FTargetPort, FConnectTimeout);
+    FSock.Connect(FTargetHost, FTargetPort);
   if FSock.LastError = 0 then
     if FFullSSL then
       FSock.SSLDoConnect;
@@ -446,7 +436,7 @@ var
 begin
   FSock.SendString('HELO ' + FSystemName + CRLF);
   x := ReadResult;
-  Result := ((x >= 250) and (x <= 259)) or (x = 220);
+  Result := (x >= 250) and (x <= 259);
 end;
 
 function TSMTPSend.Ehlo: Boolean;
@@ -455,7 +445,7 @@ var
 begin
   FSock.SendString('EHLO ' + FSystemName + CRLF);
   x := ReadResult;
-  Result := ((x >= 250) and (x <= 259)) or (x = 220);
+  Result := (x >= 250) and (x <= 259);
 end;
 
 function TSMTPSend.Login: Boolean;
@@ -465,11 +455,6 @@ var
   s: string;
 begin
   Result := False;
-//-------------------------------
-  FResultCode := -1;
-  FResultString := '';
-  FFullResult.Clear;
-//-------------------------------
   FESMTP := True;
   FAuthDone := False;
   FESMTPcap.clear;
@@ -547,37 +532,21 @@ begin
   Result := ReadResult div 100 = 2;
 end;
 
-procedure TSMTPSend.ParseESmtp;
-var
-  n: Integer;
-  z: AnsiString;
-begin
-  FESMTPcap.Clear;
-  if ESMTP then
-    for n := 1 to FFullResult.Count - 1 do
-    begin
-      z := FFullResult[n];
-      FESMTPcap.Add(Copy(z, 5, MaxInt));
-    end;
-end;
-
-function TSMTPSend.MailFrom(const Value,ADop: string; Size: Integer): Boolean;
+function TSMTPSend.MailFrom(const Value: string; Size: Integer): Boolean;
 var
   s: string;
 begin
-  s := 'MAIL FROM: <' + Value + '>';
+  s := 'MAIL FROM:<' + Value + '>';
   if FESMTPsize and (Size > 0) then
     s := s + ' SIZE=' + IntToStr(Size);
-  if ADop<>'' then
-    s := s + ' ' + ADop;
   FSock.SendString(s + CRLF);
   Result := ReadResult div 100 = 2;
 end;
 
 function TSMTPSend.MailTo(const Value: string): Boolean;
 begin
-  FSock.SendString('RCPT TO: <' + Value + '>' + CRLF);
-  Result := ReadResult = 250;
+  FSock.SendString('RCPT TO:<' + Value + '>' + CRLF);
+  Result := ReadResult div 100 = 2;
 end;
 
 function TSMTPSend.MailData(const Value: TStrings): Boolean;
@@ -629,167 +598,6 @@ begin
   x := ReadResult;
   Result := (x >= 250) and (x <= 259);
 end;
-
-function TSMTPSend.SendCmd(const AOut: string;
-  const AResponse: SmallInt): SmallInt;
-begin
-  if AResponse = -1 then begin
-    Result := SendCmd(AOut, []);
-  end else begin
-    Result := SendCmd(AOut, [AResponse]);
-  end;
-end;
-
-function TSMTPSend.SendCmd(const AOut: string;
-  const AResponse: array of SmallInt): SmallInt;
-var
-  j : Integer;
-begin
-  FSock.SendString(AOut + CRLF);
-  Result := ReadResult;
-  if Length(AResponse)>0 then
-  begin
-    for j:=Low(AResponse) to High(AResponse) do
-    begin
-      if AResponse[j]=ResultCode then
-        Exit;
-    end;
-    RaiseProtocolExcept;
-  end;
-
-end;
-
-
-function TSMTPSend.SmtpConnect: Boolean;
-begin
-  Result := False;
-  ClearResult;
-  FESMTP := False;
-  FAuthDone := False;
-  FESMTPcap.Clear;
-  FESMTPSize := False;
-  FMaxSize := 0;
-  if not Connect then
-    Exit;
-  if ReadResult <> 220 then
-    Exit;
-  Result := True;
-end;
-
-function TSMTPSend.SmtpHelo: Boolean;
-begin
-  ClearResult;
-  Result := False;
-  if SmtpSendCmdEhlo then
-  begin
-    FESMTP := True;
-    Result := True;
-  end
-  else
-  begin
-    if SmtpSendCmdHelo then
-      Result := True;
-  end;
-end;
-
-function TSMTPSend.SmtpSendCmd(const ACmd, ACmdData: AnsiString): Integer;
-var lCmd: AnsiString;
-begin
-  ClearResult;
-  FLastCmd := ACmd;
-  FLastCmdData:= ACmdData;
-  if ACmdData='' then
-    lCmd := ACmd
-  else
-    lCmd := ACmd + ' ' + ACmdData;
-  Result := SendCmd(lCmd, []);
-end;
-
-function TSMTPSend.SmtpSendCmdEhlo: Boolean;
-var x: Integer;
-begin
-  x := SmtpSendCmd('EHLO', FSystemName);
-  Result := ((x >= 250) and (x <= 259)) or (x = 220);
-end;
-
-function TSMTPSend.SmtpSendCmdHelo: Boolean;
-var x: Integer;
-begin
-  x := SmtpSendCmd('HELO', FSystemName);
-  Result := ((x >= 250) and (x <= 259)) or (x = 220);
-end;
-
-function TSMTPSend.SmtpSendCmdFrom(const AFromMail, ADop: AnsiString): Boolean;
-var z: AnsiString;
-begin
-  if ADop='' then z := '<' + AFromMail + '>'
-             else z := '<' + AFromMail + '> ' + ADop;
-  Result := SmtpSendCmd('MAIL FROM:', z) = 250
-end;
-
-function TSMTPSend.SmtpSendCmdRcpt(const ARcptMail, ADop: AnsiString): Boolean;
-var z: AnsiString;
-begin
-  if ADop='' then z := '<' + ARcptMail + '>'
-             else z := '<' + ARcptMail + '> ' + ADop;
-  Result := SmtpSendCmd('RCPT TO:', z) = 250
-end;
-
-function TSMTPSend.SmtpSendCmdData: Boolean;
-begin
-  Result := SmtpSendCmd('DATA') = 354;
-end;
-
-function TSMTPSend.SmtpSendMailData(AEml: TStrings): Boolean;
-var
-  j: Integer;
-  z: AnsiString;
-begin
-  for j:=0 to (AEml.Count-1) do
-  begin
-    z := AEml[j];
-    if z='.' then
-      z := '..';
-    Sock.SendString(z+CRLF);
-  end;
-  Result := SmtpSendCmd('.') = 250
-end;
-
-function TSMTPSend.SmtpSendQuit: Boolean;
-begin
-  Result := SmtpSendCmd('QUIT') = 221
-end;
-
-function TSMTPSend.SmtpStartTLS: Boolean;
-var lres: Integer;
-begin
-  lres := SmtpSendCmd('STARTTLS');
-  if (lres = 220) and (FSock.LastError = 0) then
-  begin
-    Fsock.SSLDoConnect;
-    Result := FSock.LastError = 0;
-  end
-  else
-  begin
-    Result := False  
-  end;
-end;
-
-function TSMTPSend.SmtpAfterHelo: Boolean;
-var s: string;
-begin
-  Result := True;
-  if FESMTP then
-  begin
-    s := FindCap('SIZE');
-    if s <> '' then
-    begin
-      FESMTPsize := True;
-      FMaxSize := StrToIntDef(Copy(s, 6, Length(s) - 5), 0);
-    end;
-  end;
-end;
-
 
 function TSMTPSend.StartTLS: Boolean;
 begin
@@ -908,7 +716,7 @@ begin
     SMTP.Password := Password;
     if SMTP.Login then
     begin
-      if SMTP.MailFrom(GetEmailAddr(MailFrom), '', Length(MailData.Text)) then
+      if SMTP.MailFrom(GetEmailAddr(MailFrom), Length(MailData.Text)) then
       begin
         s := MailTo;
         repeat

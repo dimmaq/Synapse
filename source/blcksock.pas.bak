@@ -472,7 +472,7 @@ type
      high-level functions!
 
      Method waits until data is received. If no data is received within TIMEOUT
-     (in milliseconds) period, @link(LastError) is set to ERROR_READTIMEOUT. Methods
+     (in milliseconds) period, @link(LastError) is set to WSAETIMEDOUT. Methods
      serves for reading any size of data (i.e. one megabyte...). This method is
      preffered for reading from stream sockets (like TCP).}
     function RecvBufferEx(Buffer: Tmemory; Len: Integer;
@@ -601,7 +601,7 @@ type
 
     {:If @link(LastError) contains some error code and @link(RaiseExcept)
      property is @true, raise adequate exception.}
-    procedure ExceptCheck(ARaiseAlways: Boolean = False);
+    procedure ExceptCheck;
 
     {:Returns local computer name as numerical or symbolic value. It try get
      fully qualified domain name. Name is returned in the format acceptable by
@@ -956,8 +956,8 @@ type
     FHTTPTunnelUser: string;
     FHTTPTunnelPass: string;
     FHTTPTunnelTimeout: integer;
-    procedure SocksDoConnect(IP, Port: string; AConnectTimeout:Integer=0);
-    procedure HTTPTunnelDoConnect(IP, Port: string; AConnectTimeout:Integer=0);
+    procedure SocksDoConnect(IP, Port: string);
+    procedure HTTPTunnelDoConnect(IP, Port: string);
     procedure DoAfterConnect;
   public
     {:Create TCP socket class with default plugin for SSL/TSL/SSH implementation
@@ -967,10 +967,6 @@ type
     {:Create TCP socket class with desired plugin for SSL/TSL/SSH implementation}
     constructor CreateWithSSL(SSLPlugin: TSSLClass);
     destructor Destroy; override;
-
-    {:Return descriptive string for @link(LastError). On case of error
-     in SSL/TLS subsystem, it returns right error description.}
-    function GetErrorDescEx: string; override;
 
     {:See @link(TBlockSocket.CloseSocket)}
     procedure CloseSocket; override;
@@ -1012,7 +1008,7 @@ type
 
      Note: If you call this on non-created socket, then socket is created
      automaticly.}
-    procedure Connect(IP, Port: string; AConnectTimeout:Integer=0); override;
+    procedure Connect(IP, Port: string); override;
 
     {:If you need upgrade existing TCP connection to SSL/TLS (or SSH2, if plugin
      allows it) mode, then call this method. This method switch this class to
@@ -1097,7 +1093,7 @@ type
   public
     {:Fill @link(TBlockSocket.RemoteSin) structure. This address is used for
      sending data.}
-    procedure Connect(IP, Port: string; AConnectTimeout:Integer=0); override;
+    procedure Connect(IP, Port: string); override;
 
     {:Silently redirected to @link(TBlockSocket.SendBufferTo).}
     function SendBuffer(Buffer: TMemory; Length: Integer): Integer; override;
@@ -1447,7 +1443,6 @@ type
     FTargetPort: string;
     FIPInterface: string;
     FTimeout: integer;
-    FConnectTimeout: Integer;
     FUserName: string;
     FPassword: string;
   public
@@ -1465,9 +1460,6 @@ type
 
     {:Specify default timeout for socket operations.}
     property Timeout: integer read FTimeout Write FTimeout;
-
-    {:Specify default timeout for connect func.}
-    property ConnectTimeout: integer read FConnectTimeout Write FConnectTimeout;
 
     {:If protocol need user authorization, then fill here username.}
     property UserName: string read FUserName Write FUserName;
@@ -1898,67 +1890,16 @@ begin
   end;
 end;
 
-procedure TBlockSocket.Connect(IP, Port: string; AConnectTimeout:Integer);
+procedure TBlockSocket.Connect(IP, Port: string);
 var
   Sin: TVarSin;
-  res: Integer;
-  FDSet: TFDSet;
-  Time: TTimeVal;
-//  IOTime : Integer;
-//  LSockAddrIn  : TSockAddrIn;
-
 begin
-  ResetLastError;
   SetSin(Sin, IP, Port);
   if FLastError = 0 then
   begin
-    {DONE: connect timeout}
     if FSocket = INVALID_SOCKET then
       InternalCreateSocket(Sin);
-    // конеккт с timeout
-    if AConnectTimeout>0 then
-    begin
-      // Соединение с сервером - довольно долгий процесс, поэтому мы поступим по
-      // хитрому - а именно переводим сокет в неблокирующий режим
-      SetNonBlockMode(True);
-    end;
-    // соединяемся
-    res := synsock.Connect(FSocket, Sin);
-    SockCheck(res);
-    if res = SOCKET_ERROR then
-    begin
-      // Обычно при неблокирующем соединении выдается вот эта ошибка
-      // на попытку соединения, поэтому мы будем ждать окончания
-      // соединения через select
-      FLastError := WSAGetLastError;
-      if FLastError=WSAEWOULDBLOCK then
-      begin
-        ResetLastError;
-        FD_ZERO(FDSet);
-        FD_SET(FSocket, FDSet);
-        // секунды
-        Time.tv_sec := AConnectTimeout div 1000;
-        // микросек. 10^-6
-        Time.tv_usec := (AConnectTimeout mod 1000) * 1000;
-        Res := select(0, nil, @FDSet, nil, @Time);
-        if Res=0 then
-        begin
-          FLastError := WSAETIMEDOUT;
-        end;
-        // Соединились - теперь неблокирующий режим нам не нужен
-        // Возвращаем все как было
-        if FLastError = 0 then
-        begin
-          SetNonBlockMode(False);
-          FLastError := WSAGetLastError;
-        end;
-      end
-//      else
-//      begin
-//        FLastError := ERROR_UNKNOW
-//      end;
-    end;
-    //------------------------------------------------
+    SockCheck(synsock.Connect(FSocket, Sin));
     if FLastError = 0 then
       GetSins;
     FBuffer := '';
@@ -2085,7 +2026,7 @@ begin
           SockCheck(r);
         end
         else
-          FLastError := ERROR_SENDTIMEOUT;
+          FLastError := WSAETIMEDOUT;
       end;
       if FLastError <> 0 then
         Break;
@@ -2277,7 +2218,7 @@ begin
         Timeout := Timeout - integer(TickDelta(ti, GetTick));
         if Timeout <= 0 then
         begin
-          FLastError := ERROR_RECVTIMEOUT;
+          FLastError := WSAETIMEDOUT;
           Break;
         end;
       end;
@@ -2383,7 +2324,7 @@ begin
         end;
       end
       else
-        FLastError := ERROR_RECVTIMEOUT;
+        FLastError := WSAETIMEDOUT;
     end;
   end;
   if FConvertLineEnd and (Result <> '') then
@@ -2477,7 +2418,7 @@ begin
       Timeout := Timeout - integer(TickDelta(ti, GetTick));
       if Timeout <= 0 then
       begin
-        FLastError := ERROR_RECVTIMEOUT;
+        FLastError := WSAETIMEDOUT;
         Break;
       end;
     end;
@@ -2628,21 +2569,21 @@ begin
   Result := FLastError;
 end;
 
-procedure TBlockSocket.ExceptCheck(ARaiseAlways: Boolean);
+procedure TBlockSocket.ExceptCheck;
 var
   e: ESynapseError;
 begin
   FLastErrorDesc := GetErrorDescEx;
-  if (LastError <> 0) {and (FLastError<>WSAECONNRESET)} and (LastError <> WSAEINPROGRESS)
+  if (LastError <> 0) and (LastError <> WSAEINPROGRESS)
     and (LastError <> WSAEWOULDBLOCK) then
   begin
     DoStatus(HR_Error, IntToStr(FLastError) + ',' + FLastErrorDesc);
-    if ARaiseAlways or FRaiseExcept then
+    if FRaiseExcept then
     begin
       e := ESynapseError.Create(Format('Synapse TCP/IP Socket error %d: %s',
         [FLastError, FLastErrorDesc]));
       e.ErrorCode := FLastError;
-      e.ErrorDesc := FLastErrorDesc;
+      e.ErrorMessage := FLastErrorDesc;
       raise e;
     end;
   end;
@@ -3158,14 +3099,6 @@ begin
   case ErrorCode of
     0:
       Result := '';
-    //---
-    ERROR_RECVTIMEOUT:
-      Result := 'Receive timeout';
-    ERROR_SENDTIMEOUT:
-      Result := 'Send timeout';
-    ERROR_UNKNOW:
-      Result := 'Unknow error';
-    //---
     WSAEINTR: {10004}
       Result := 'Interrupted system call';
     WSAEBADF: {10009}
@@ -3269,7 +3202,7 @@ begin
     WSANO_DATA: {11004}
       Result := 'Valid name, no data record of requested type'
   else
-    Result := SysErrorMessage(ErrorCode) // 'Other Winsock error (' + IntToStr(ErrorCode) + ')';
+    Result := 'Other Winsock error (' + IntToStr(ErrorCode) + ')';
   end;
 {$ENDIF}
 end;
@@ -3319,11 +3252,10 @@ begin
         Buf := #5 + #2 + #2 +#0;
       SendString(Buf);
       Buf := RecvBufferStr(2, FSocksTimeout);
-      if (Length(Buf)<2) or (Buf[1]<>#5) then
-      begin
-        raise ESynSocksError.Create('Bad recv data');
+      if Length(Buf) < 2 then
         Exit;
-      end;
+      if Buf[1] <> #5 then
+        Exit;
       n := Ord(Buf[2]);
       case n of
         0: //not need authorisation
@@ -3335,19 +3267,12 @@ begin
             SendString(Buf);
             Buf := RecvBufferStr(2, FSocksTimeout);
             if Length(Buf) < 2 then
-            begin
-              raise ESynSocksError.Create('Bad auth recv data');
               Exit;
-            end;
             if Buf[2] <> #0 then
-            begin
-              raise ESynSocksError.Create('Not Auth');
               Exit;
-            end;
           end;
       else
         //other authorisation is not supported!
-        raise ESynSocksError.CreateFmt('Authorisation method 0x%x is not support', [n]);
         Exit;
       end;
       FUsingSocks := True;
@@ -3393,10 +3318,7 @@ begin
       if FLastError <> 0 then
         Exit;
       if Buf[1] <> #0 then
-      begin
-        Raise ESynSocksError.Create('Bad header');
         Exit;
-      end;
       FSocksLastError := Ord(Buf[2]);
     end
     else
@@ -3419,7 +3341,6 @@ begin
         4:
           s := RecvBufferStr(16, FSocksTimeout);
       else
-        Raise ESynSocksError.Create('Bad header');
         Exit;
       end;
       Buf := Buf + s + RecvBufferStr(2, FSocksTimeout);
@@ -3427,34 +3348,8 @@ begin
         Exit;
       FSocksLastError := Ord(Buf[2]);
     end;
-    //---
-    if ((FSocksLastError <> 0) and (FSocksLastError <> $5A{90})) then
-    begin
-      case FSocksLastError of // http://en.wikipedia.org/wiki/SOCKS
-        // v4
-        $5a: m := 'request granted';
-        $5b: m := 'request rejected or failed';
-        $5c: m := 'request failed because client is not running identd (or not reachable from the server)';
-        $5d: m := 'request failed because client''s identd could not confirm the user ID string in the request';
-        // v5'
-        $00: m := 'request grant`ed';
-        $01: m := 'general failure';
-        $02: m := 'connection not allowed by ruleset';
-        $03: m := 'network unreachable';
-        $04: m := 'host unreachable';
-        $05: m := 'connection refused by destination host';
-        $06: m := 'TTL expired';
-        $07: m := 'command not supported / protocol error';
-        $08: m := 'address type not supported';
-        else
-          m := '';
-      end;
-      z := Format('Error 0x%x', [FSocksLastError]);
-      if m<>'' then
-        z := z + ' ' + m;
-      Raise ESynSocksProtError.CreateErrorCode(FSocksLastError, z);
+    if ((FSocksLastError <> 0) and (FSocksLastError <> 90)) then
       Exit;
-    end;
     SocksDecode(Buf);
     Result := True;
   finally
@@ -3568,7 +3463,7 @@ end;
 
 {======================================================================}
 
-procedure TDgramBlockSocket.Connect(IP, Port: string; AConnectTimeout:Integer);
+procedure TDgramBlockSocket.Connect(IP, Port: string);
 begin
   SetRemoteSin(IP, Port);
   InternalCreateSocket(FRemoteSin);
@@ -3904,75 +3799,49 @@ begin
   end;
 end;
 
-procedure TTCPBlockSocket.Connect(IP, Port: string; AConnectTimeout:Integer);
+procedure TTCPBlockSocket.Connect(IP, Port: string);
 begin
   if FSocksIP <> '' then
-    SocksDoConnect(IP, Port, AConnectTimeout)
+    SocksDoConnect(IP, Port)
   else
     if FHTTPTunnelIP <> '' then
       HTTPTunnelDoConnect(IP, Port)
     else
-      inherited Connect(IP, Port, AConnectTimeout);
+      inherited Connect(IP, Port);
   if FLasterror = 0 then
     DoAfterConnect;
 end;
 
-procedure TTCPBlockSocket.SocksDoConnect(IP, Port: string; AConnectTimeout:Integer);
+procedure TTCPBlockSocket.SocksDoConnect(IP, Port: string);
 var
   b: Boolean;
-  newError: ESynSocksError;
-  oldError: ESynapseError;
 begin
-  try
-    inherited Connect(FSocksIP, FSocksPort, AConnectTimeout);
-    if FLastError = 0 then
-    begin
-      b := SocksOpen;
-      if b then
-        b := SocksRequest(1, IP, Port);
-      if b then
-        b := SocksResponse;
-      //TODO: ProtocolExcepion for Socks Error
-      if not b and (FLastError = 0) then
-      begin
-        FLastError := ERROR_UNKNOW;
-        raise ESynSocksError.Create('Unknow error');
-      end;
-      FSocksLocalIP := FSocksResponseIP;
-      FSocksLocalPort := FSocksResponsePort;
-      FSocksRemoteIP := IP;
-      FSocksRemotePort := Port;
-    end;
-    //---
-    ExceptCheck;
-  except
-    on E: Exception do
-    begin
-      if (E is ESynapseError) and (not (E is ESynSocksProtError)) and (not (E is ESynSocksError)) then
-      begin
-        oldError := (E as ESynapseError);
-        newError := ESynSocksError.Create(oldError.Message);
-        newError.ErrorCode := oldError.ErrorCode;
-        newError.ErrorDesc := oldError.ErrorDesc;
-        raise newError;
-      end
-      else
-      begin
-        raise;
-      end;
-    end
+  inherited Connect(FSocksIP, FSocksPort);
+  if FLastError = 0 then
+  begin
+    b := SocksOpen;
+    if b then
+      b := SocksRequest(1, IP, Port);
+    if b then
+      b := SocksResponse;
+    if not b and (FLastError = 0) then
+      FLastError := WSASYSNOTREADY;
+    FSocksLocalIP := FSocksResponseIP;
+    FSocksLocalPort := FSocksResponsePort;
+    FSocksRemoteIP := IP;
+    FSocksRemotePort := Port;
   end;
   ExceptCheck;
   DoStatus(HR_Connect, IP + ':' + Port);
 end;
 
-procedure TTCPBlockSocket.HTTPTunnelDoConnect(IP, Port: string; AConnectTimeout:Integer);
+procedure TTCPBlockSocket.HTTPTunnelDoConnect(IP, Port: string);
 //bugfixed by Mike Green (mgreen@emixode.com)
 var
   s: string;
 begin
   Port := IntToStr(ResolvePort(Port));
-  inherited Connect(FHTTPTunnelIP, FHTTPTunnelPort, AConnectTimeout);
+  inherited Connect(FHTTPTunnelIP, FHTTPTunnelPort);
   if FLastError <> 0 then
     Exit;
   FHTTPTunnel := False;
@@ -4203,7 +4072,6 @@ begin
   FTargetHost := cLocalhost;
   FTargetPort := cAnyPort;
   FTimeout := 5000;
-  FConnectTimeout := 0;
   FUsername := '';
   FPassword := '';
 end;
@@ -4386,26 +4254,13 @@ end;
 {======================================================================}
 
 {$IFDEF ONCEWINSOCK}
-
-{ ESynapseError }
-
-constructor ESynapseError.CreateErrorCode(AErrorCode: Integer;
-  const AErrorDesc: string);
-var Z: string;
-begin
-  Z := Trim(AErrorDesc);
-  inherited Create(Z);
-  FErrorCode := AErrorCode;
-  FErrorDesc := Z;
-end;
-
 initialization
 begin
   if not InitSocketInterface(DLLStackName) then
   begin
     e := ESynapseError.Create('Error loading Socket interface (' + DLLStackName + ')!');
     e.ErrorCode := 0;
-    e.ErrorDesc := 'Error loading Socket interface (' + DLLStackName + ')!';
+    e.ErrorMessage := 'Error loading Socket interface (' + DLLStackName + ')!';
     raise e;
   end;
   synsock.WSAStartup(WinsockLevel, WsaDataOnce);
